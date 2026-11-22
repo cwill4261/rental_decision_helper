@@ -16,3 +16,10 @@ class Rental:
     community_gym: bool
     community_pool: bool
     covered_parking: bool
+
+    def total_monthly_cost(self):
+        return (
+            self.monthly_rent
+            + self.monthly_utilities
+            + self.monthly_parking_fee
+        )
