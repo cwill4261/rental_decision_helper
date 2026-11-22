@@ -222,10 +222,331 @@ def enter_rental():
         covered_parking=covered_parking
     )
 
+
+def get_optional_number(prompt, number_type=float, minimum=0):
+    while True:
+        text = input(prompt).strip()
+
+        if text == "":
+            return None
+
+        try:
+            value = number_type(text)
+
+            if not math.isfinite(value) or value < minimum:
+                print(f"Enter a finite number that is {minimum} or greater.")
+                continue
+
+            return value
+        except ValueError:
+            print("Enter a valid number or press Enter to skip.")
+
+
+def enter_requirements():
+    print("\nSet Rental Requirements")
+    print("Press Enter to skip a numeric requirement.")
+    print("For amenities, 'no' means the feature is not required.")
+
+    requirements = {
+        "maximum_cost": get_optional_number(
+            "Maximum total monthly cost: "
+        ),
+        "minimum_bedrooms": get_optional_number(
+            "Minimum bedrooms: ", int
+        ),
+        "minimum_bathrooms": get_optional_number(
+            "Minimum bathrooms: "
+        ),
+        "minimum_square_feet": get_optional_number(
+            "Minimum square footage: ", int, minimum=1
+        ),
+        "maximum_commute": get_optional_number(
+            "Maximum commute in minutes: ", int
+        )
+    }
+
+    amenities = [
+        ("pets_allowed", "Pets allowed"),
+        ("in_unit_laundry", "In-unit laundry"),
+        ("community_gym", "Community gym"),
+        ("community_pool", "Community pool"),
+        ("covered_parking", "Covered parking")
+    ]
+
+    for attribute, label in amenities:
+        requirements[attribute] = get_yes_no(
+            f"Require {label.lower()}? (yes/no): "
+        )
+
+    return requirements
+
+
+def check_requirements(rental, requirements):
+    failures = []
+
+    numeric_checks = [
+        (
+            "maximum_cost",
+            rental.total_monthly_cost(),
+            "maximum",
+            "Monthly cost exceeds budget"
+        ),
+        (
+            "minimum_bedrooms",
+            rental.bedrooms,
+            "minimum",
+            "Not enough bedrooms"
+        ),
+        (
+            "minimum_bathrooms",
+            rental.bathrooms,
+            "minimum",
+            "Not enough bathrooms"
+        ),
+        (
+            "minimum_square_feet",
+            rental.square_feet,
+            "minimum",
+            "Square footage below minimum"
+        ),
+        (
+            "maximum_commute",
+            rental.commute_minutes,
+            "maximum",
+            "Commute exceeds maximum"
+        )
+    ]
+
+    for key, actual, limit_type, message in numeric_checks:
+        limit = requirements[key]
+
+        if limit is None:
+            continue
+
+        if limit_type == "maximum" and actual > limit:
+            failures.append(message)
+        elif limit_type == "minimum" and actual < limit:
+            failures.append(message)
+
+    amenities = [
+        ("pets_allowed", "Pets not allowed"),
+        ("in_unit_laundry", "No in-unit laundry"),
+        ("community_gym", "No community gym"),
+        ("community_pool", "No community pool"),
+        ("covered_parking", "No covered parking")
+    ]
+
+    for attribute, message in amenities:
+        if requirements[attribute] and not getattr(rental, attribute):
+            failures.append(message)
+
+    return failures
+
+
+def show_requirement_results(rentals, requirements):
+    if not rentals:
+        print("\nNo rentals have been added yet.")
+        return
+
+    qualifying = []
+    excluded = []
+
+    for rental in rentals:
+        failures = check_requirements(rental, requirements)
+
+        if failures:
+            excluded.append((rental, failures))
+        else:
+            qualifying.append(rental)
+
+    print("\nRENTALS MEETING ALL REQUIREMENTS")
+
+    if qualifying:
+        view_rentals(qualifying)
+    else:
+        print("No rentals meet all your requirements.")
+
+    if excluded:
+        print("\nRENTALS NOT MEETING REQUIREMENTS")
+
+        for rental, failures in excluded:
+            print(f"\n{rental.name}")
+            for reason in failures:
+                print(f"  - {reason}")
+
+def enter_weights():
+    print("\nSet Preference Weights")
+    print("0 = ignore, 1 = slightly important, 5 = very important")
+    print("Type 'cancel' at any prompt to return without changes.")
+    print("Lower cost and shorter commute are preferred.")
+    print("More bedrooms, bathrooms, and space are preferred.")
+
+    fields = [
+        ("monthly_cost", "Lower total monthly cost"),
+        ("bedrooms", "More bedrooms"),
+        ("bathrooms", "More bathrooms"),
+        ("square_feet", "More square footage"),
+        ("commute_minutes", "Shorter commute"),
+        ("pets_allowed", "Pets allowed"),
+        ("in_unit_laundry", "In-unit laundry"),
+        ("community_gym", "Community gym"),
+        ("community_pool", "Community pool"),
+        ("covered_parking", "Covered parking")
+    ]
+
+    while True:
+        weights = {}
+
+        for attribute, label in fields:
+            while True:
+                answer = input(
+                    f"{label} — weight (0–5), or cancel: "
+                ).strip().lower()
+
+                if answer == "cancel":
+                    return None
+
+                try:
+                    weight = int(answer)
+
+                    if 0 <= weight <= 5:
+                        weights[attribute] = weight
+                        break
+
+                    print("Enter a whole number from 0 to 5.")
+                except ValueError:
+                    print("Enter a whole number from 0 to 5, or cancel.")
+
+        if sum(weights.values()) > 0:
+            return weights
+
+        print("\nChoose at least one weight greater than zero.")
+
+
+def get_preference_value(rental, field):
+    if field == "monthly_cost":
+        return rental.total_monthly_cost()
+
+    return getattr(rental, field)
+
+
+def rank_rentals(rentals, weights):
+    if not rentals:
+        return []
+
+    total_weight = sum(weights.values())
+
+    if total_weight == 0:
+        return []
+
+    lower_is_better = {"monthly_cost", "commute_minutes"}
+    numeric_fields = {
+        "monthly_cost",
+        "bedrooms",
+        "bathrooms",
+        "square_feet",
+        "commute_minutes"
+    }
+
+    ranked = []
+
+    for rental in rentals:
+        weighted_total = 0
+        details = []
+
+        for field, weight in weights.items():
+            if weight == 0:
+                continue
+
+            value = get_preference_value(rental, field)
+
+            if field in numeric_fields:
+                values = [
+                    get_preference_value(item, field)
+                    for item in rentals
+                ]
+                lowest = min(values)
+                highest = max(values)
+
+                if highest == lowest:
+                    score = 50.0
+                elif field in lower_is_better:
+                    score = 100 * (highest - value) / (highest - lowest)
+                else:
+                    score = 100 * (value - lowest) / (highest - lowest)
+            else:
+                score = 100.0 if value else 0.0
+
+            contribution = score * weight / total_weight
+            weighted_total += contribution
+
+            label = field.replace("_", " ").title()
+            details.append(
+                f"{label}: {score:.1f}/100 × weight {weight} "
+                f"= {contribution:.1f} points"
+            )
+
+        ranked.append((rental, weighted_total, details))
+
+    return sorted(ranked, key=lambda item: item[1], reverse=True)
+
+
+def show_ranked_rentals(rentals, requirements, weights):
+    qualifying = []
+    excluded = []
+
+    for rental in rentals:
+        failures = check_requirements(rental, requirements)
+
+        if failures:
+            excluded.append((rental, failures))
+        else:
+            qualifying.append(rental)
+
+    if not qualifying:
+        print("\nNo rentals meet all your requirements.")
+    else:
+        print("\nRanked Rentals")
+        print("Scores compare qualifying rentals in this shortlist.")
+        print("Equal numeric values receive 50 points.")
+        print("Equal final scores are tied.")
+
+        ranked = rank_rentals(qualifying, weights)
+        previous_score = None
+        rank = 0
+
+        for position, (rental, score, details) in enumerate(
+            ranked, start=1
+        ):
+            displayed_score = round(score, 1)
+
+            if displayed_score != previous_score:
+                rank = position
+
+            previous_score = displayed_score
+
+            print(f"\n{rank}. {rental.name} — {score:.1f}/100")
+            print(
+                f"   Monthly total: "
+                f"${rental.total_monthly_cost():,.2f}"
+            )
+
+            for detail in details:
+                print(f"   {detail}")
+
+    if excluded:
+        print("\nExcluded Rentals")
+
+        for rental, failures in excluded:
+            print(f"{rental.name}: {'; '.join(failures)}")
+
+
 def main():
     print("Welcome to Rental Decision Helper!")
 
     rentals = load_rentals()
+    requirements = None
+    weights = None
 
     # Stop if loading failed so existing data is not overwritten.
     if rentals is None:
@@ -238,9 +559,13 @@ def main():
         print("1. View and compare rentals")
         print("2. Add a rental")
         print("3. Edit a rental")
+        print("4. Set or replace requirements")
+        print("5. Check rentals against requirements")
+        print("6. Set or replace preference weights")
+        print("7. View ranked rentals")
         print("0. Exit")
 
-        choice = get_menu_choice("Choose an option: ", 3)
+        choice = get_menu_choice("Choose an option: ", 7)
 
         if choice == 1:
             view_rentals(rentals)
@@ -266,6 +591,40 @@ def main():
                     f"{rental.name}: "
                     f"${rental.total_monthly_cost():,.2f}"
                 )
+
+        elif choice == 4:
+            requirements = enter_requirements()
+            print("Requirements updated for this session.")
+
+        elif choice == 5:
+            if requirements is None:
+                print("Choose option 4 to set your requirements first.")
+            else:
+                show_requirement_results(rentals, requirements)
+
+        elif choice == 6:
+            new_weights = enter_weights()
+
+            if new_weights is None:
+                print("Selection canceled. Previous weights unchanged.")
+            else:
+                weights = new_weights
+                print("\nPreference weights updated for this session.")
+
+                for field, weight in weights.items():
+                    print(
+                        f"{field.replace('_', ' ').title()}: {weight}"
+                    )
+
+        elif choice == 7:
+            if not rentals:
+                print("Add a rental first.")
+            elif requirements is None:
+                print("Choose option 4 to set requirements first.")
+            elif weights is None:
+                print("Choose option 6 to set preference weights first.")
+            else:
+                show_ranked_rentals(rentals, requirements, weights)        
 
         elif choice == 0:
             if save_rentals(rentals):
